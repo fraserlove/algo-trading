@@ -1,12 +1,28 @@
 # Algorithmic Trading
 A Collection of algorithmic trading scripts.
 
-### Setup
-```
+## Installation and Usage
+Setup your environment and install the required dependencies as follows:
+
+1. **Clone the Repository:**
+```bash
 git clone https://github.com/fraserlove/algo-trading.git
 cd algo-trading
-python -m venv venv
-source venv/bin/activate
+```
+
+2. **Create a Python Virtual Environment:**
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+3. **Install Dependencies via PIP:**
+
+```bash
 pip install -r requirements.txt
+```
+
+4. **Run a Jupyter Notebook server**
+``` bash
 jupyter notebook
 ```
