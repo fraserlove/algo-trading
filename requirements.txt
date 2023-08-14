@@ -1,2 +1,8 @@
+# Trading Platform
 alpaca-py
+
+# Importing API keys
 keyring
+
+# US Congress Trading Data
+quiverquant
