@@ -1,21 +1,19 @@
 import keyring
-import quiverquant
 import datetime
 import time
+import pandas as pd
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-MAX_TRADES = 10 # The maximum number of trades to hold at once.
-POSITION_LENGTH = 55 # Number of days to hold a trade.
+from senate_scraper import senate_trading
+
+POSITION_LENGTH = 60 # Number of days to hold a trade.
 FUND_SIZE = 1000 # Total size of the fund in USD.
 USE_PAPER = True # Use paper trading, no real money used.
 
-def load_apis():
-    quiver_api_key = keyring.get_password('quiverquant', 'api_key')
-    quiver = quiverquant.quiver(quiver_api_key)
-
+def load_alpaca():
     (api_key_type, secret_key_type) = ('api_key_paper', 'secret_key_paper') if USE_PAPER else ('api_key', 'secret_key')
     api_key = keyring.get_password('alpaca', api_key_type)
     secret_key = keyring.get_password('alpaca', secret_key_type)
@@ -24,40 +22,39 @@ def load_apis():
         raise Exception('Alpaca API key not found.')
     alpaca = TradingClient(api_key, secret_key, paper=USE_PAPER)
 
-    return quiver, alpaca
+    return alpaca
 
 
-def load_orders_df():
-    df = quiver.senate_trading()
-    
+def load_orders() -> pd.DataFrame:
+    df = senate_trading()
     # Filter out trades that were not stock purchases made within the position length.
     cutoff_date = datetime.datetime.now() - datetime.timedelta(days=POSITION_LENGTH)
-    df = df[(df['Date'] >= cutoff_date) & (df['Transaction'] == 'Purchase')]
-    
+    df = df[(df['tx_date'] >= cutoff_date) & (df['type'] == 'Purchase')]
+
     # Weighting stocks to buy based on the aggregate of the dollar amount purchased.
-    df.loc[:, 'Amount'] = df['Amount'] / df['Amount'].sum() * FUND_SIZE
-
-    df = df.drop(columns=['Range', 'Senator', 'Transaction', 'Date'])
+    df.loc[:, 'weighted_amount'] = df['tx_amount'] / df['tx_amount'].sum() * FUND_SIZE
     df.reset_index(drop=True, inplace=True)
-
     return df
 
 
-def init_buy_orders(orders_df):
+def init_buys(orders_df):
     for _, order in orders_df.iterrows():
-        ticker = order['Ticker']
-        amount = round(order['Amount'], 2)
+        ticker = order['ticker']
+        amount = round(order['weighted_amount'], 2)
+        if alpaca.get_asset(ticker).fractionable:
+            print(f'Initiating buy: {ticker} - ${amount}.')
 
-        print(f'Initiating buy: {ticker} - ${amount}.')
-        order = alpaca.submit_order(
-            order_data = MarketOrderRequest(
-                symbol=ticker,
-                notional=amount,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
+            order = alpaca.submit_order(
+                order_data = MarketOrderRequest(
+                    symbol=ticker,
+                    notional=amount,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY
+                )
             )
-        )
-        print(f'Bought: {order.symbol} @ ${order.filled_avg_price}. Total ${order.notional}')
+            print(f'Bought: {order.symbol} @ ${order.filled_avg_price}. Total ${order.notional}')
+        else:
+            print(f'Skipping {ticker}. Not fractionable.')
     print(f'All positions filled. Total exposure now: ${alpaca.get_account().long_market_value}')
 
 
@@ -79,27 +76,26 @@ def fund_details():
 
 
 def wait_for_market():
-    ''' Wait a week until the next market open. '''
+    ''' Wait until the next market open. '''
+    if clock.timestamp < latest_rebalance + datetime.timedelta(days=7):
+        if not clock.is_open:
+            print(f'Market is closed. Sleeping until {clock.next_open}...')
+            t_delta = (clock.next_open - clock.timestamp).total_seconds()
+            time.sleep(t_delta)
+            print('Market now open. Awakening...')
 
-    week_open = clock.next_open + datetime.timedelta(days=6)
-    print(f'Sleeping until {week_open}...')
-    time_diff = (week_open - clock.timestamp).total_seconds()
-    time.sleep(time_diff)
-
-    while not clock.is_open:
-        print(f'Market not open today. Sleeping until {clock.next_open}...')
-        time_diff = (clock.next_open - clock.timestamp).total_seconds()
-        time.sleep(time_diff)
-
-    print('Market now open. Awakening...')
+def rebalance():
+    ''' Sells all assets then creates new orders. '''
+    sell_all()
+    orders = load_orders()
+    init_buys(orders)
+    return clock.timestamp
 
 if __name__ == '__main__':
-    quiver, alpaca = load_apis()
+    alpaca = load_alpaca()
     clock = alpaca.get_clock()
+    latest_rebalance = rebalance()
     while True:
-        orders_df = load_orders_df()
-        if clock.is_open:
-            sell_all()
-            init_buy_orders(orders_df)
-        fund_details()
         wait_for_market()
+        latest_rebalance = rebalance()
+        fund_details()

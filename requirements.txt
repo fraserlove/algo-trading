@@ -4,5 +4,8 @@ alpaca-py
 # Importing API keys
 keyring
 
-# US Congress Trading Data
-quiverquant
+# Parsing US Congress Trading Data
+requests
+pandas
+lxml
+beautifulsoup4
