@@ -10,7 +10,7 @@ SEARCH_URL = f'{ROOT}/search/'
 REPORTS_URL = f'{ROOT}/search/report/data/'
 
 BATCH_SIZE = 100 # Number of records to process in a single batch. Must be max of 100.
-LOOKBACK_PERIOD = 100 # Lookback period (in days) to search for records.
+LOOKBACK_PERIOD = 60 # Lookback period (in days) to search for records.
 
 # Header names for the columns in the generated dataframe.
 HEADER = ['senator', 'tx_date', 'file_date', 'ticker', 'type', 'tx_amount']
@@ -23,19 +23,22 @@ def csrf(client: requests.Session) -> str:
     :return: The CSRF token extracted from the session cookies.
     '''
 
-    # Fetch the landing page using the client session.
-    landing_page = bs4.BeautifulSoup(client.get(LANDING_URL).text, 'lxml')
-    # Extract the CSRF token from the HTML form on the landing page.
-    form_csrf = landing_page.find(attrs={'name': 'csrfmiddlewaretoken'})['value']
-    # Prepare the payload for the form submission including the CSRF token.
-    form_payload = { 'csrfmiddlewaretoken': form_csrf, 'prohibition_agreement': '1' }
-    # Submit the form using a POST request to set the session's CSRF token.
-    client.post(LANDING_URL, data=form_payload, headers={'Referer': LANDING_URL})
-    # Return the CSRF token from the session cookies.
-    return client.cookies['csrftoken'] if 'csrftoken' in client.cookies else client.cookies['csrf']
+    try:
+        # Fetch the landing page using the client session.
+        landing_page = bs4.BeautifulSoup(client.get(LANDING_URL).text, 'lxml')
+        # Extract the CSRF token from the HTML form on the landing page.
+        form_csrf = landing_page.find(attrs={'name': 'csrfmiddlewaretoken'})['value']
+        # Prepare the payload for the form submission including the CSRF token.
+        form_payload = { 'csrfmiddlewaretoken': form_csrf, 'prohibition_agreement': '1' }
+        # Submit the form using a POST request to set the session's CSRF token.
+        client.post(LANDING_URL, data=form_payload, headers={'Referer': LANDING_URL})
+        # Return the CSRF token from the session cookies.
+        return client.cookies['csrftoken'] if 'csrftoken' in client.cookies else client.cookies['csrf']
+    except:
+        print('ERROR: Unable to load CRSF token for EFD search.')
 
 
-def reports_api(client: requests.Session, offset: int, token: str) -> list[list[str]]:
+def fetch_reports(client: requests.Session, offset: int, token: str) -> list[list[str]]:
     '''
     Query the periodic transaction reports API and return the fetched data.
 
@@ -57,34 +60,10 @@ def reports_api(client: requests.Session, offset: int, token: str) -> list[list[
     # Send a POST request to the reports API to fetch the data.
     response = client.post(REPORTS_URL, data=login_data, headers={'Referer': SEARCH_URL})
     if not response.status_code == 200:
-        print(f'Failed to fetch senate trading data: {response.status_code}')
+        print(f'ERROR: Failed to fetch senate trading data: {response.status_code} error.')
+        return []
     # Extract and return the data from the response in JSON format.
     return response.json()['data']
-
-
-def senator_reports(client: requests.Session) -> list[list[str]]:
-    '''
-    Fetch and return all results from the periodic transaction reports API.
-
-    :param client: A `requests.Session` object representing the client's session.
-    :return: A list of lists containing the transaction report data.
-    '''
-
-    i = 0
-    all_reports = []
-    token = csrf(client)
-    # Fetch the initial batch of reports from the API.
-    reports = reports_api(client, i, token)
-    
-    # Fetch reports from the API in batches until no more reports are received.
-    while len(reports):
-        # Extend the list of all_reports with the reports fetched in this batch.
-        all_reports.extend(reports)
-        # Move to the next batch.
-        i += BATCH_SIZE
-        # Fetch reports for the current batch.
-        reports = reports_api(client, i, token)
-    return all_reports
 
 
 def fetch_tbody(client: requests.Session, link: str) -> bs4.element.Tag:
@@ -145,6 +124,31 @@ def fetch_txs(client: requests.Session, row: list[str]) -> pd.DataFrame:
     return pd.DataFrame(stocks).rename(columns=dict(enumerate(HEADER)))
 
 
+def senator_reports(client: requests.Session) -> list[list[str]]:
+    '''
+    Fetch and return all results from the periodic transaction reports API.
+
+    :param client: A `requests.Session` object representing the client's session.
+    :return: A list of lists containing the transaction report data.
+    '''
+
+    i = 0
+    all_reports = []
+    token = csrf(client)
+    # Fetch the initial batch of reports from the API.
+    reports = fetch_reports(client, i, token)
+    
+    # Fetch reports from the API in batches until no more reports are received.
+    while len(reports):
+        # Extend the list of all_reports with the reports fetched in this batch.
+        all_reports.extend(reports)
+        # Move to the next batch.
+        i += BATCH_SIZE
+        # Fetch reports for the current batch.
+        reports = fetch_reports(client, i, token)
+    return all_reports
+
+
 def senate_trading() -> pd.DataFrame:
     '''
     Search for senate trades, fetch transaction data, and return as a DataFrame.
@@ -152,7 +156,7 @@ def senate_trading() -> pd.DataFrame:
     :return: A DataFrame containing senate trading transaction data.
     '''
 
-    print('Searching for senate trades...')
+    print('INFO: Searching for senate trades...')
     client = requests.Session()
     # Fetch reports containing Senate trading data.
     reports = senator_reports(client)
@@ -171,6 +175,6 @@ def senate_trading() -> pd.DataFrame:
             all_txs['tx_date'] = pd.to_datetime(all_txs['tx_date'])
             all_txs['file_date'] = pd.to_datetime(all_txs['file_date'])
 
-    print(f'Found {len(all_txs)} trades.')
+    print(f'INFO: Found {len(all_txs)} trades.')
     # Sort transactions by 'tx_date' in descending order and return the DataFrame.
     return all_txs.sort_values('tx_date', ascending=False)
