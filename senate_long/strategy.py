@@ -9,7 +9,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 from scraper import senate_trading
 
-USE_PAPER = True # Use paper trading, no real money used.
+USE_PAPER = False # Use paper trading, no real money used.
 POSITION_LENGTH = 60 # Number of days to hold a trade.
 REBALANCE_FREQUENCY = 7 # Number of days to wait between rebalancing.
 
@@ -143,10 +143,10 @@ def rebalance() -> datetime.datetime:
 if __name__ == '__main__':
     alpaca = load_alpaca()
     clock = alpaca.get_clock()
-    fund_details()
     # Perform initial balancing of portfolio at the next market open.
     next_rebalance = clock.timestamp
-
+    fund_details()
+    
     while True:
         # If a rebalance is due, perform one and display the updated fund details.
         if clock.timestamp >= next_rebalance:
