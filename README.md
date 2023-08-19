@@ -22,7 +22,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. **Run Any Strategy **
+4. **Run Any Strategy:**
 ``` bash
 python sentate_long/strategy.py
 ```
