@@ -9,7 +9,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 from scraper import senate_trading
 
-USE_PAPER = False # Use paper trading, no real money used.
+USE_PAPER = True # Use paper trading, no real money used.
 POSITION_LENGTH = 60 # Number of days to hold a trade.
 REBALANCE_FREQUENCY = 7 # Number of days to wait between rebalancing.
 
@@ -29,6 +29,7 @@ def load_alpaca() -> TradingClient:
         raise Exception('Alpaca API key not found.')
     if not USE_PAPER:
         print('WARNING: Live Trading.')
+
     return TradingClient(api_key, secret_key, paper=USE_PAPER)
 
 
@@ -38,20 +39,15 @@ def load_orders() -> pd.DataFrame:
 
     :return: A DataFrame containing trading orders.
     '''
-
-    df = senate_trading()
-    # Filter out trades that were not stock purchases made within the position length.
-    cutoff_date = datetime.datetime.now() - datetime.timedelta(days=POSITION_LENGTH)
-    df = df[(df['tx_date'] >= cutoff_date) & (df['type'] == 'Purchase')]
-
+    df = senate_trading(lookback_period=POSITION_LENGTH, tx_type='Purchase')
     # Weighting stocks to buy based on the aggregate of the dollar amount purchased.
-    cash = float(alpaca.get_account().cash)
+    cash = float(trade_client.get_account().cash)
     df.loc[:, 'weighted_amount'] = df['tx_amount'] / df['tx_amount'].sum() * cash
     df.reset_index(drop=True, inplace=True)
     return df
 
 
-def init_buys(orders_df: pd.DataFrame) -> None:
+def buy_orders(orders_df: pd.DataFrame) -> None:
     '''
     Initialise buy orders based on the provided DataFrame of orders.
 
@@ -62,14 +58,11 @@ def init_buys(orders_df: pd.DataFrame) -> None:
     for _, order in orders_df.iterrows():
         ticker = order['ticker']
 
-        # Round amount to comply with Alpaca fractional trading limits.
-        amount = round(order['weighted_amount'], 2)
-        if not alpaca.get_asset(ticker).fractionable:
-            continue # TODO: Make orders on non-fractionable trades.
-
         # Check asset is tradable through Alpaca.
-        if alpaca.get_asset(ticker).tradable:
-            order = alpaca.submit_order(
+        if trade_client.get_asset(ticker).fractionable:
+            # Round amount to comply with Alpaca fractional trading limits.
+            amount = round(order['weighted_amount'], 2)
+            order = trade_client.submit_order(
                 order_data = MarketOrderRequest(
                     symbol=ticker,
                     notional=amount,
@@ -79,22 +72,22 @@ def init_buys(orders_df: pd.DataFrame) -> None:
             )
             print(f'BUY: ${order.notional} of {order.symbol}')
         else:
-            print(f'INFO: Skipping {ticker}. Not tradable via Alpaca.')
-    print(f'INFO: {clock.timestamp}: All {len(orders_df)} orders initiated. Total exposure now: ${float(alpaca.get_account().long_market_value):.2f}')
+            print(f'INFO: Skipping {ticker}. Not fractionable via Alpaca.')
+    print(f'INFO: {clock.timestamp}: All {len(orders_df)} orders initiated. Total exposure now: ${float(trade_client.get_account().long_market_value):.2f}')
 
 
-def sell_all() -> None:
+def close_all() -> None:
     ''' Sell all positions and close all orders. '''
 
     print('INFO: Closing all positions.')
-    alpaca.close_all_positions(cancel_orders=True)
+    trade_client.close_all_positions(cancel_orders=True)
 
 
 def fund_details() -> None:
     ''' Print details about the funds state. '''
 
-    account = alpaca.get_account()
-    positions = alpaca.get_all_positions()
+    account = trade_client.get_account()
+    positions = trade_client.get_all_positions()
 
     print(f'\n========== Fund Details ==========')
     print(f'Current Time: {clock.timestamp}')
@@ -104,7 +97,6 @@ def fund_details() -> None:
     print(f'Fees: ${float(account.accrued_fees):.2f}')
     print(f'Open Positions: {len(positions)}')
     print(f'Currency: {account.currency}')
-    print(f'Date: {datetime.datetime.now()}')
     print(f'Next Rebalance: {next_rebalance}')
     print(f'==================================\n')
 
@@ -127,26 +119,23 @@ def rebalance() -> datetime.datetime:
 
     print(f'INFO: {clock.timestamp}: Initiating Rebalance...')
     try:
+        close_all()
         orders = load_orders()
-        sell_all()
-        init_buys(orders)
-        # Calculate the time until the next rebalance is due.
-        if clock.is_open:
-            return clock.next_open + datetime.timedelta(days=REBALANCE_FREQUENCY - 1)
-        return clock.next_open + datetime.timedelta(days=REBALANCE_FREQUENCY)
+        buy_orders(orders)
+        # Update the time until the next rebalance is due.
+        return next_rebalance + datetime.timedelta(days=REBALANCE_FREQUENCY)
     except:
         print('ERROR: Rebalance failed. Trying again at next market open.')
-        # If rebalance fails, try again a the next market open.
         return clock.next_open
     
 
 if __name__ == '__main__':
-    alpaca = load_alpaca()
-    clock = alpaca.get_clock()
+    trade_client = load_alpaca()
+    clock = trade_client.get_clock()
     # Perform initial balancing of portfolio at the next market open.
     next_rebalance = clock.timestamp
     fund_details()
-    
+
     while True:
         # If a rebalance is due, perform one and display the updated fund details.
         if clock.timestamp >= next_rebalance:

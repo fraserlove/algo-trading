@@ -10,7 +10,6 @@ SEARCH_URL = f'{ROOT}/search/'
 REPORTS_URL = f'{ROOT}/search/report/data/'
 
 BATCH_SIZE = 100 # Number of records to process in a single batch. Must be max of 100.
-LOOKBACK_PERIOD = 60 # Lookback period (in days) to search for records.
 
 # Header names for the columns in the generated dataframe.
 HEADER = ['senator', 'tx_date', 'file_date', 'ticker', 'type', 'tx_amount']
@@ -38,18 +37,19 @@ def csrf(client: requests.Session) -> str:
         print('ERROR: Unable to load CRSF token for EFD search.')
 
 
-def fetch_reports(client: requests.Session, offset: int, token: str) -> list[list[str]]:
+def fetch_reports(client: requests.Session, offset: int, token: str, lookback_period: int) -> list[list[str]]:
     '''
     Query the periodic transaction reports API and return the fetched data.
 
     :param client: A `requests.Session` object representing the client's session.
     :param offset: The starting index of the reports to fetch.
     :param token: The CSRF token to include in the request.
+    :param lookback_period: Lookback period (in days) to search for records.
     :return: A list of lists containing the fetched transaction report data.
     '''
     
     # Only request reports that were made within the lookback period.
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=LOOKBACK_PERIOD)).strftime('%m/%d/%Y')
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=lookback_period)).strftime('%m/%d/%Y')
     login_data = {
         'start': str(offset),
         'length': str(BATCH_SIZE),
@@ -85,13 +85,15 @@ def fetch_tbody(client: requests.Session, link: str) -> bs4.element.Tag:
     return report.find('tbody')
 
 
-def fetch_txs(client: requests.Session, row: list[str]) -> pd.DataFrame:
+def fetch_txs(client: requests.Session, row: list[str], lookback_period: int, tx_type: str) -> pd.DataFrame:
     '''
     Convert a row from the periodic transaction reports API to a DataFrame
     of transactions.
 
     :param client: A `requests.Session` object representing the client's session.
     :param row: A list representing a row of data from the periodic transaction reports API.
+    :param lookback_period: Lookback period (in days) to search for records.
+    :param tx_type: The type of transaction to filter for.
     :return: A DataFrame containing transaction data.
     '''
 
@@ -103,6 +105,8 @@ def fetch_txs(client: requests.Session, row: list[str]) -> pd.DataFrame:
     tbody = fetch_tbody(client, link)
 
     stocks = []
+    # Calculate cutoff date so only transactions within the lookback period are included.
+    cutoff_date = datetime.datetime.now() - datetime.timedelta(days=lookback_period)
     # Check that tbody exists.
     if tbody:
         # Iterate through each table row within the tbody.
@@ -116,19 +120,25 @@ def fetch_txs(client: requests.Session, row: list[str]) -> pd.DataFrame:
             ticker = cols[3].strip()
             order_type = cols[6].strip()
 
-            # Append transaction details to the 'stocks' list.
+            # Append transaction details to the 'stocks' list. Removing instances of null tickers.
             if ticker.strip() not in ('--', ''):
-                stocks.append([f'{first} {last}', tx_date, file_date, ticker, order_type, tx_amount])
+                # Filter out trades that were not stock purchases made within the position length.
+                if datetime.datetime.strptime(tx_date, '%m/%d/%Y') >= cutoff_date:
+                    # Filter out trades that are not of the correct transaction type.
+                    if order_type == tx_type:
+                        stocks.append([f'{first} {last}', tx_date, file_date, ticker, order_type, tx_amount])             
                 
     # Create a DataFrame from the 'stocks' list and rename columns using HEADER.
     return pd.DataFrame(stocks).rename(columns=dict(enumerate(HEADER)))
 
 
-def senator_reports(client: requests.Session) -> list[list[str]]:
+def senator_reports(client: requests.Session, lookback_period: int) -> list[list[str]]:
     '''
     Fetch and return all results from the periodic transaction reports API.
 
     :param client: A `requests.Session` object representing the client's session.
+    :param lookback_period: Lookback period (in days) to search for records.
+    :param tx_type: The type of transaction to filter for.
     :return: A list of lists containing the transaction report data.
     '''
 
@@ -136,7 +146,7 @@ def senator_reports(client: requests.Session) -> list[list[str]]:
     all_reports = []
     token = csrf(client)
     # Fetch the initial batch of reports from the API.
-    reports = fetch_reports(client, i, token)
+    reports = fetch_reports(client, i, token, lookback_period)
     
     # Fetch reports from the API in batches until no more reports are received.
     while len(reports):
@@ -145,27 +155,28 @@ def senator_reports(client: requests.Session) -> list[list[str]]:
         # Move to the next batch.
         i += BATCH_SIZE
         # Fetch reports for the current batch.
-        reports = fetch_reports(client, i, token)
+        reports = fetch_reports(client, i, token, lookback_period)
     return all_reports
 
 
-def senate_trading() -> pd.DataFrame:
+def senate_trading(lookback_period: int, tx_type: str) -> pd.DataFrame:
     '''
     Search for senate trades, fetch transaction data, and return as a DataFrame.
 
+    :param lookback_period: Lookback period (in days) to search for records.
     :return: A DataFrame containing senate trading transaction data.
     '''
 
     print('INFO: Searching for senate trades...')
     client = requests.Session()
     # Fetch reports containing Senate trading data.
-    reports = senator_reports(client)
+    reports = senator_reports(client, lookback_period)
 
     all_txs = pd.DataFrame()
     # Loop through each report and fetch transaction data.
     for report in reports:
         # Fetch transactions for the current report.
-        txs = fetch_txs(client, report)
+        txs = fetch_txs(client, report, lookback_period, tx_type)
         # Check that transactions are present.
         if not txs.empty:
             # Concatenate the fetched transactions to the overall DataFrame.
