@@ -22,7 +22,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. **Run a Jupyter Notebook server**
+4. **Run Any Strategy **
 ``` bash
-jupyter notebook
+python sentate_long/strategy.py
 ```
