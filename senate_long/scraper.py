@@ -164,7 +164,7 @@ class SenateScraper():
         :return: A DataFrame containing senate trading transaction data.
         '''
 
-        print('INFO: Searching for senate trades...')
+        print(f'INFO: Searching for senate trades. LOOKBACK_PERIOD: {lookback_period}. TX_TYPE: {tx_type}.')
         # Fetch reports containing Senate trading data.
         reports = self._senator_reports(lookback_period)
 
@@ -178,9 +178,12 @@ class SenateScraper():
                 # Concatenate the fetched transactions to the overall DataFrame.
                 all_txs = pd.concat([all_txs, pd.DataFrame(txs)], ignore_index=True)
 
-                # Convert 'tx_date' and 'file_date' columns to datetime objects.
-                all_txs['tx_date'] = pd.to_datetime(all_txs['tx_date'])
-                all_txs['file_date'] = pd.to_datetime(all_txs['file_date'])
+                file_date = datetime.datetime.strptime(report[4], '%m/%d/%Y').strftime('%Y-%m-%d')
+                print(f'INFO: Fetched Report ({file_date}). {report[0]} {report[1]}. {len(txs)} trades.')
+
+        # Convert 'tx_date' and 'file_date' columns to datetime objects.
+        all_txs['tx_date'] = pd.to_datetime(all_txs['tx_date'])
+        all_txs['file_date'] = pd.to_datetime(all_txs['file_date'])
 
         print(f'INFO: Found {len(all_txs)} trades.')
         # Sort transactions by 'tx_date' in descending order and return the DataFrame.

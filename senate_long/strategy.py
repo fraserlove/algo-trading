@@ -16,24 +16,25 @@ class Strategy:
         self.position_length = position_length # Number of days to hold a trade.
         self.rebalance_frequency = rebalance_frequency # Number of days to wait between rebalancing.
 
+
+    def timestamp(self) -> datetime.datetime:
+        ''' Returns the current market time adjusted to UTC. '''
+        return self.trade_client.get_clock().timestamp
     
+
     def run(self):
         ''' Runs the strategy, performing an initial rebalance and then rebalancing accordingly. '''
 
         self.trade_client = self._load_client()
         self.account = self.trade_client.get_account()
-        self.clock = self.trade_client.get_clock()
         # Perform initial balancing of portfolio now.
-        self.next_rebalance = self.clock.timestamp
+        self.next_rebalance = self.timestamp()
 
         self.fund_details()
         while True:
-            # If a rebalance is due, perform one and display the updated fund details.
-            if self.clock.timestamp >= self.next_rebalance:
-                self.rebalance()
-                self.fund_details()
-            # Wait for the next market open.
-            self.wait_for_market()
+            self.rebalance()
+            self.fund_details()
+            self.wait_for_rebalance()
 
 
     def _load_client(self) -> TradingClient:
@@ -66,8 +67,8 @@ class Strategy:
 
         orders = SenateScraper().senate_trading(lookback_period=self.position_length, tx_type='Purchase')
         # Weighting stocks to buy based on the aggregate of the dollar amount purchased.
-        cash = float(self.trade_client.get_account().cash)
-        orders.loc[:, 'weighted_amount'] = orders['tx_amount'] / orders['tx_amount'].sum() * cash
+        equity = float(self.trade_client.get_account().equity)
+        orders.loc[:, 'weighted_amount'] = orders['tx_amount'] / orders['tx_amount'].sum() * equity
         return orders
 
 
@@ -78,7 +79,7 @@ class Strategy:
         :param orders_df: A DataFrame containing trading orders.
         '''
 
-        print(f'INFO: {self.clock.timestamp}: Initiating {len(orders)} buy orders...')
+        print(f'INFO: {self.timestamp()}: Initiating {len(orders)} buy orders...')
         for _, order in orders.iterrows():
             ticker = order['ticker']
 
@@ -97,7 +98,7 @@ class Strategy:
                 print(f'BUY: ${order.notional} of {order.symbol}')
             else:
                 print(f'INFO: Skipping {ticker}. Not fractionable via Alpaca.')
-        print(f'INFO: {self.clock.timestamp}: All {len(self.orders)} orders initiated. Total exposure now: ${float(self.account.long_market_value):.2f}')
+        print(f'INFO: {self.timestamp()}: All {len(orders)} orders initiated. Total exposure now: ${float(self.account.long_market_value):.2f}')
 
 
     def close_all(self) -> None:
@@ -113,7 +114,7 @@ class Strategy:
         positions = self.trade_client.get_all_positions()
 
         print(f'\n========== Fund Details ==========')
-        print(f'Current Time: {self.clock.timestamp}')
+        print(f'Current Time: {self.timestamp()}')
         print(f'Fund Equity: ${float(self.account.equity):.2f}')
         print(f'Last Equity: ${float(self.account.last_equity):.2f}')
         print(f'Cash: ${float(self.account.cash):.2f}')
@@ -124,26 +125,21 @@ class Strategy:
         print(f'==================================\n')
 
 
-    def wait_for_market(self) -> None:
-        ''' Wait until the next market open. '''
+    def wait_for_rebalance(self) -> None:
+        ''' Wait until the next rebalance is due. '''
 
-        print(f'INFO: {self.clock.timestamp}: Waiting for next market open. Sleeping until {self.clock.next_open}...')
+        print(f'INFO: {self.timestamp()}: Waiting for next rebalance ({self.next_rebalance})...')
         try:
-            time.sleep((self.clock.next_open - self.clock.timestamp).total_seconds())
+            time.sleep((self.next_rebalance - self.timestamp()).total_seconds())
         except KeyboardInterrupt:
-            print('Exiting strategy...')
-            return
-        print(f'INFO: {self.clock.timestamp}: Market now open. Awakening...')
+            print('Exiting strategy...'); raise SystemExit
+        print(f'INFO: {self.timestamp()}: Reblance due. Awakening...')
 
 
     def rebalance(self):
         ''' Perform the rebalancing process by selling all assets and creating new orders. '''
 
-        print(f'INFO: {self.clock.timestamp}: Initiating Rebalance...')
-
-        self.close_all()
-        orders = self.load_orders()
-        self.buy_orders(orders)
+        print(f'INFO: {self.timestamp()}: Initiating Rebalance...')
         try:
             self.close_all()
             orders = self.load_orders()
