@@ -1,3 +1,4 @@
+import argparse
 import keyring
 import datetime
 import time
@@ -11,10 +12,12 @@ from scraper import SenateScraper
 
 class Strategy:
 
-    def __init__(self, use_paper: bool = True, position_length: int = 60, rebalance_frequency: int = 7):
-        self.use_paper = use_paper # Use paper trading, no real money used.
+    def __init__(self, live: bool, position_length: int, rebalance_frequency: int):
+        self.live = live # Use paper trading, no real money used.
         self.position_length = position_length # Number of days to hold a trade.
         self.rebalance_frequency = rebalance_frequency # Number of days to wait between rebalancing.
+
+        print(f'INFO: Running strategy. LIVE: {live}. POSITION_LENGTH: {position_length}. REBALANCE_FREQUENCY: {rebalance_frequency}')
 
 
     def timestamp(self) -> datetime.datetime:
@@ -26,7 +29,6 @@ class Strategy:
         ''' Runs the strategy, performing an initial rebalance and then rebalancing accordingly. '''
 
         self.trade_client = self._load_client()
-        self.account = self.trade_client.get_account()
         # Perform initial balancing of portfolio now.
         self.next_rebalance = self.timestamp()
 
@@ -44,18 +46,19 @@ class Strategy:
         :return: An instance of the Alpaca TradingClient.
         '''
 
+        if self.live:
+            print('WARNING: Live Trading.')
+
         # Fetch Alpaca API keys from Apple keychain.
-        (api_key_type, secret_key_type) = ('api_key_paper', 'secret_key_paper') if self.use_paper else ('api_key', 'secret_key')
+        (api_key_type, secret_key_type) = ('api_key', 'secret_key') if self.live else ('api_key_paper', 'secret_key_paper')
         api_key = keyring.get_password('alpaca', api_key_type)
         secret_key = keyring.get_password('alpaca', secret_key_type)
 
         if not api_key or not secret_key:
             raise Exception('Alpaca API key not found.')
-        
-        if not self.use_paper:
-            print('WARNING: Live Trading.')
 
-        return TradingClient(api_key, secret_key, paper=self.use_paper)
+        paper = not self.live
+        return TradingClient(api_key, secret_key, paper=paper)
 
 
     def load_orders(self) -> pd.DataFrame:
@@ -98,7 +101,7 @@ class Strategy:
                 print(f'BUY: ${order.notional} of {order.symbol}')
             else:
                 print(f'INFO: Skipping {ticker}. Not fractionable via Alpaca.')
-        print(f'INFO: {self.timestamp()}: All {len(orders)} orders initiated. Total exposure now: ${float(self.account.long_market_value):.2f}')
+        print(f'INFO: {self.timestamp()}: All {len(orders)} orders initiated.')
 
 
     def close_all(self) -> None:
@@ -111,16 +114,17 @@ class Strategy:
     def fund_details(self) -> None:
         ''' Print details about the funds state. '''
 
+        account = self.trade_client.get_account()
         positions = self.trade_client.get_all_positions()
 
         print(f'\n========== Fund Details ==========')
         print(f'Current Time: {self.timestamp()}')
-        print(f'Fund Equity: ${float(self.account.equity):.2f}')
-        print(f'Last Equity: ${float(self.account.last_equity):.2f}')
-        print(f'Cash: ${float(self.account.cash):.2f}')
-        print(f'Fees: ${float(self.account.accrued_fees):.2f}')
+        print(f'Fund Equity: ${float(account.equity):.2f}')
+        print(f'Last Equity: ${float(account.last_equity):.2f}')
+        print(f'Cash: ${float(account.cash):.2f}')
+        print(f'Fees: ${float(account.accrued_fees):.2f}')
         print(f'Open Positions: {len(positions)}')
-        print(f'Currency: {self.account.currency}')
+        print(f'Currency: {account.currency}')
         print(f'Next Rebalance: {self.next_rebalance}')
         print(f'==================================\n')
 
@@ -152,5 +156,13 @@ class Strategy:
     
 
 if __name__ == '__main__':
-    senate_long = Strategy()
+
+    parser = argparse.ArgumentParser(description='Run the senate long strategy with optional arguments.')
+    parser.add_argument('--live', default=False, action=argparse.BooleanOptionalAction, help='Trade with live funds or a paper account.')
+    parser.add_argument('--position_length', default=60, type=int, help='Number of days to hold a trade.')
+    parser.add_argument('--rebalance_frequency', default=7, type=int, help='Number of days to wait between rebalancing.')
+
+    args = parser.parse_args()
+    
+    senate_long = Strategy(args.live, args.position_length, args.rebalance_frequency)
     senate_long.run()
