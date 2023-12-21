@@ -1,5 +1,5 @@
 # Algorithmic Trading
-A Collection of algorithmic trading scripts.
+A collection of algorithmic trading scripts.
 
 ## Installation and Usage
 These scripts use the Alpaca trading API with the `keyring` package to import Alpaca API keys from the Apple Keychain on macOS. Please make sure you have generated your Alapca API keys and stored them in the Apple Keychain with service name `'alpaca'` and account names `'secret_key'` and `'api_key'`. This can be used for both live and paper trading. The code below can be used to add the correct API keys to your Apple Keychain. Replace `<API_KEY>` and `<SECRET_KEY>` with your generated keys. If you want to use paper trading, you can also replace  `<API_KEY_PAPER>` and `<SECRET_KEY_PAPER>` with your corresponding paper keys.
